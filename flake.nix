@@ -37,6 +37,8 @@
           rustPlatform,
           systemd,
           wayland,
+          clang,
+          mold,
           installShellFiles,
           withDbus ? true,
           withSystemd ? true,
@@ -93,6 +95,8 @@
               libgbm
               pango
               wayland
+              clang
+              mold
             ]
             ++ lib.optional (withDbus || withScreencastSupport || withSystemd) dbus
             ++ lib.optional withScreencastSupport pipewire
@@ -140,14 +144,16 @@
           env = {
             # Force linking with libEGL and libwayland-client
             # so they can be discovered by `dlopen()`
-            RUSTFLAGS = toString (
-              map (arg: "-C link-arg=" + arg) [
-                "-Wl,--push-state,--no-as-needed"
-                "-lEGL"
-                "-lwayland-client"
-                "-Wl,--pop-state"
-              ]
-            );
+            RUSTFLAGS = "-Clinker=${clang}/bin/clang "
+              + toString (
+                map (arg: "-Clink-arg=" + arg) [
+                  "-Wl,--push-state,--no-as-needed"
+                  "-lEGL"
+                  "-lwayland-client"
+                  "-Wl,--pop-state"
+                  "--ld-path=${mold}/bin/mold"
+                ]
+              );
           };
 
           passthru = {
@@ -185,6 +191,9 @@
         in
         {
           default = pkgs.mkShell {
+            shellHook = '' 
+              export RUSTFLAGS="-C linker=${pkgs.clang}/bin/clang -C link-arg=--ld-path=${pkgs.mold}/bin/mold"
+            '';
             packages = [
               # We don't use the toolchain from nixpkgs
               # because we prefer a nightly toolchain
