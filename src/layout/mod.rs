@@ -499,6 +499,7 @@ pub enum HitType {
 enum OverviewProgress {
     Animation(Animation),
     Gesture(OverviewGesture),
+    Open,
 }
 
 #[derive(Debug)]
@@ -629,6 +630,7 @@ impl OverviewProgress {
         match self {
             OverviewProgress::Animation(anim) => anim.value(),
             OverviewProgress::Gesture(gesture) => gesture.value,
+            OverviewProgress::Open => 1.,
         }
     }
 
@@ -2649,9 +2651,11 @@ impl<W: LayoutElement> Layout<W> {
             }
         }
 
-        if !self.overview_open {
-            if let Some(OverviewProgress::Animation(anim)) = &mut self.overview_progress {
-                if anim.is_done() {
+        if let Some(OverviewProgress::Animation(anim)) = &mut self.overview_progress {
+            if anim.is_done() {
+                if self.overview_open {
+                    self.overview_progress = Some(OverviewProgress::Open);
+                } else {
                     self.overview_progress = None;
                 }
             }
