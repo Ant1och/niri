@@ -154,6 +154,7 @@
                   "--ld-path=${mold}/bin/mold"
                 ]
               );
+            NIRI_BUILD_COMMIT = self.shortRev;
           };
 
           passthru = {
