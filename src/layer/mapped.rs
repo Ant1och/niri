@@ -1,22 +1,27 @@
+use std::sync::Arc;
+
 use niri_config::utils::MergeWith as _;
 use niri_config::{Config, LayerRule};
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::Kind;
 use smithay::desktop::{LayerSurface, PopupManager};
-use smithay::utils::{Logical, Point, Scale, Size};
-use smithay::wayland::compositor::{remove_pre_commit_hook, HookId};
+use smithay::utils::{Logical, Point, Rectangle, Scale, Size};
+use smithay::wayland::compositor::{remove_pre_commit_hook, with_states, HookId};
 use smithay::wayland::shell::wlr_layer::{ExclusiveZone, Layer};
 
 use super::ResolvedLayerRules;
 use crate::animation::Clock;
+use crate::handlers::background_effect::get_cached_blur_region;
 use crate::layout::shadow::Shadow;
 use crate::niri_render_elements;
+use crate::render_helpers::background_effect::{BackgroundEffect, BackgroundEffectElement};
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::shadow::ShadowRenderElement;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::surface::push_elements_from_surface_tree;
-use crate::render_helpers::RenderCtx;
-use crate::utils::{baba_is_float_offset, round_logical_in_physical};
+use crate::render_helpers::xray::XrayPos;
+use crate::render_helpers::{background_effect, RenderCtx};
+use crate::utils::{baba_is_float_offset, round_logical_in_physical, surface_geo};
 
 #[derive(Debug)]
 pub struct MappedLayer {
@@ -40,6 +45,9 @@ pub struct MappedLayer {
     /// The shadow around the surface.
     shadow: Shadow,
 
+    /// The background effect, like blur, behind the layer-surface.
+    background_effect: BackgroundEffect,
+
     /// The view size for the layer surface's output.
     view_size: Size<f64, Logical>,
 
@@ -55,6 +63,7 @@ niri_render_elements! {
         Wayland = WaylandSurfaceRenderElement<R>,
         SolidColor = SolidColorRenderElement,
         Shadow = ShadowRenderElement,
+        BackgroundEffect = BackgroundEffectElement,
     }
 }
 
@@ -82,6 +91,7 @@ impl MappedLayer {
             view_size,
             scale,
             shadow: Shadow::new(shadow_config),
+            background_effect: BackgroundEffect::new(config.blur),
             clock,
         }
     }
@@ -115,6 +125,20 @@ impl MappedLayer {
         // FIXME: is_active based on keyboard focus?
         self.shadow
             .update_render_elements(size, true, radius, self.scale, 1.);
+
+        // This blur_region_changed working depends on this blur_region() call being the first one
+        // after any change to the blur region. It works out because the only other call is in
+        // render(), and update_render_elements() must be called before render() in the same event
+        // loop iteration.
+        let (blur_region, blur_region_changed) = self.blur_region();
+        let has_blur_region = blur_region.is_some_and(|r| !r.is_empty());
+
+        self.background_effect.update_render_elements(
+            radius,
+            self.rules.background_effect,
+            has_blur_region,
+            blur_region_changed,
+        );
     }
 
     pub fn are_animations_ongoing(&self) -> bool {
@@ -177,13 +201,15 @@ impl MappedLayer {
 
     pub fn render_normal<R: NiriRenderer>(
         &self,
-        ctx: RenderCtx<R>,
+        mut ctx: RenderCtx<R>,
         location: Point<f64, Logical>,
+        mut xray_pos: XrayPos,
         push: &mut dyn FnMut(LayerSurfaceRenderElement<R>),
     ) {
         let scale = Scale::from(self.scale);
         let alpha = self.rules.opacity.unwrap_or(1.).clamp(0., 1.);
         let location = location + self.bob_offset();
+        xray_pos = xray_pos.offset(self.bob_offset());
 
         if ctx.target.should_block_out(self.rules.block_out_from) {
             // Round to physical pixels.
@@ -216,6 +242,31 @@ impl MappedLayer {
         let location = location.to_physical_precise_round(scale).to_logical(scale);
         self.shadow
             .render(ctx.renderer, location, &mut |elem| push(elem.into()));
+
+        let geometry = Rectangle::new(location, self.block_out_buffer.size());
+        if self.background_effect.is_visible() {
+            let (blur_region, _) = self.blur_region();
+            let surface_anim_scale = Scale::from(1.);
+            if let Some(params) = background_effect::render_params_for_tile(
+                geometry,
+                self.scale,
+                false,
+                ctx.target.should_block_out(self.rules.block_out_from),
+                blur_region,
+                &mut || {
+                    surface_geo(self.surface.wl_surface())
+                        .unwrap_or_default()
+                        .to_f64()
+                },
+                surface_anim_scale,
+            ) {
+                let xray_pos = xray_pos.offset(params.geometry.loc - geometry.loc);
+                self.background_effect
+                    .render(ctx.as_gles(), params, xray_pos, &mut |elem| {
+                        push(elem.into())
+                    });
+            }
+        }
     }
 
     pub fn render_popups<R: NiriRenderer>(
@@ -250,6 +301,10 @@ impl MappedLayer {
                 &mut |elem| push(elem.into()),
             );
         }
+    }
+
+    fn blur_region(&self) -> (Option<Arc<Vec<Rectangle<i32, Logical>>>>, bool) {
+        with_states(self.surface.wl_surface(), get_cached_blur_region)
     }
 }
 
