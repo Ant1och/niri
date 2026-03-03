@@ -80,7 +80,7 @@ impl MappedLayer {
             view_size,
             scale,
             shadow: Shadow::new(shadow_config),
-            background_effect: BackgroundEffect::new(),
+            background_effect: BackgroundEffect::new(config.blur),
             clock,
         }
     }

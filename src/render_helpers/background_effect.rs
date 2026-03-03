@@ -164,12 +164,12 @@ niri_render_elements! {
 }
 
 impl BackgroundEffect {
-    pub fn new() -> Self {
+    pub fn new(blur_config: niri_config::Blur) -> Self {
         Self {
             nonxray: array::from_fn(|_| FramebufferEffect::new()),
             damage: ExtraDamage::new(),
             corner_radius: CornerRadius::default(),
-            blur_config: niri_config::Blur::default(),
+            blur_config,
             options: Options::default(),
         }
     }

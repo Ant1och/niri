@@ -198,7 +198,7 @@ impl<W: LayoutElement> Tile<W> {
             shadow: Shadow::new(shadow_config),
             sizing_mode,
             fullscreen_backdrop: SolidColorBuffer::new((0., 0.), [0., 0., 0., 1.]),
-            background_effect: BackgroundEffect::new(),
+            background_effect: BackgroundEffect::new(options.blur),
             restore_to_floating: false,
             floating_window_size: None,
             floating_pos: None,
